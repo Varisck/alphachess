@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "alphachess"
+version = "0.1.0"
+description = "AlphaZero-style self-improving chess engine"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.0",
+    "python-chess>=1.10",
+    "numpy>=1.24",
+    "fsspec>=2023.6",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "pyyaml>=6.0",
+    "structlog>=23.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+cloud = [
+    "s3fs>=2023.6",
+    "gcsfs>=2023.6",
+]
+
+[tool.setuptools.packages.find]
+include = ["alphachess*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

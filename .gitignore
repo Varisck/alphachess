@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Project data (large / generated)
+data/pgn/
+data/pretrain_records/
+data/selfplay/
+data/models/
+data/logs/
+
+# Environment / secrets
+.env
+.env.*
+*.env.*
+
+# PyTorch checkpoints (if outside data/)
+*.pt
+*.pth
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Coverage / testing
+.coverage
+htmlcov/
+.pytest_cache/
+
