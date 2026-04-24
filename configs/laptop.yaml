@@ -1,0 +1,21 @@
+storage:
+  root_uri: "file:///data/alphachess/run_local"
+
+nn:
+  num_blocks: 5
+  channels: 64
+
+mcts:
+  num_simulations: 200
+
+selfplay:
+  games_per_worker_batch: 4
+
+train:
+  batch_size: 256
+  min_games_before_training: 50
+  steps_per_checkpoint: 200
+
+orchestrator:
+  role: local
+  selfplay_workers: 2
