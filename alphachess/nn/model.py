@@ -29,8 +29,8 @@ class _ResidualBlock(nn.Module):
             padding: int = 1
             ):
         super().__init__()
-        self.conv1 = nn.Conv2d(channels, channels, kernel_size, padding, bias = False)
-        self.conv2 = nn.Conv2d(channels, channels, kernel_size, padding, bias = False)
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size, padding=padding, bias = False)
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size, padding=padding, bias = False)
         self.bn1 = nn.BatchNorm2d(channels)
         self.bn2 = nn.BatchNorm2d(channels)
         self.activation = activation
@@ -74,7 +74,7 @@ class AlphaChessNet(nn.Module):
 
         # First convs
         self.start_conv = nn.Conv2d(input_planes, channels, kernel_size,
-                                    padding, bias = False)
+                                    padding=padding, bias = False)
         self.start_bn = nn.BatchNorm2d(channels)
         self.activation = activation
 

@@ -80,6 +80,13 @@ class PretrainConfig(BaseModel):
     batch_size: int = 1024
     val_split: float = 0.05
     early_stop_top1: float = 0.50
+    mongo_uri: str = "mongodb://localhost:27017"
+    mongo_db: str = "twic"
+    mongo_collection: str = "games"
+    shard_size: int = 50_000
+    records_subdir: str = "pretrain_records"
+    value_loss_weight: float = 1.0
+    moves_per_game: int | None = 5
 
 
 class OrchestratorConfig(BaseModel):
