@@ -28,7 +28,7 @@ from alphachess.storage import Storage
 log = logging.getLogger(__name__)
 
 
-def main(config_path: str) -> int:
+def main(config_path: str, ingest_only: bool = False) -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
@@ -36,15 +36,18 @@ def main(config_path: str) -> int:
     config = Config.from_yaml(config_path)
     storage = Storage(config.storage.root_uri)
 
-    final_rel = f"models/{PRETRAIN_FINAL_GENERATION:06d}.pt"
-    if storage.exists(final_rel):
-        log.info("%s already exists, nothing to do", final_rel)
-        return 0
-
     manifest_rel = f"{config.pretrain.records_subdir}/{MANIFEST_NAME}"
     if not storage.exists(manifest_rel):
         log.info("no records manifest at %s, ingesting from MongoDB", manifest_rel)
         ingest(config, storage=storage)
+
+    if ingest_only:
+        return 0
+
+    final_rel = f"models/{PRETRAIN_FINAL_GENERATION:06d}.pt"
+    if storage.exists(final_rel):
+        log.info("%s already exists, nothing to do", final_rel)
+        return 0
 
     log.info("starting supervised trainer")
     train(config, storage=storage)
@@ -53,10 +56,8 @@ def main(config_path: str) -> int:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Pretrain AlphaChessNet from master games")
-    parser.add_argument(
-        "--config",
-        required=True,
-        help="path to YAML config file",
-    )
+    parser.add_argument("--config", required=True, help="path to YAML config file")
+    parser.add_argument("--ingest-only", action="store_true", default=False,
+                        help="run ingest then exit, skip training")
     args = parser.parse_args()
-    sys.exit(main(args.config))
+    sys.exit(main(args.config, ingest_only=args.ingest_only))

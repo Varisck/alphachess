@@ -55,12 +55,16 @@ def _shard_filename(shard_id: int) -> str:
     return f"{shard_id:06d}.npz"
 
 
-def select_move_indices(num_moves: int, moves_per_game: int | None) -> set[int]:
-    """Indices of sampled moves from a game, sampling is uniform.
-        
+def select_move_indices(
+    num_moves: int,
+    moves_per_game: int | None,
+    rng: np.random.Generator | None = None,
+) -> set[int]:
+    """Randomly sample move indices from a game without replacement.
+
     With ``moves_per_game = None`` (or ``>= num_moves``) returns all indices.
-    Otherwise returns ``moves_per_game`` indices spread evenly over
-    ``[0, num_moves - 1]``.
+    Otherwise returns ``moves_per_game`` indices drawn uniformly at random
+    from ``[0, num_moves - 1]``.
     """
     if num_moves <= 0:
         return set()
@@ -68,8 +72,9 @@ def select_move_indices(num_moves: int, moves_per_game: int | None) -> set[int]:
         return set(range(num_moves))
     if moves_per_game <= 0:
         return set()
-    raw = np.linspace(0, num_moves - 1, moves_per_game)
-    return {int(round(x)) for x in raw}
+    if rng is None:
+        rng = np.random.default_rng()
+    return set(rng.choice(num_moves, size=moves_per_game, replace=False).tolist())
 
 
 def write_shard(
@@ -142,6 +147,7 @@ def ingest(
     config: Config,
     storage: Storage | None = None,
     games: Iterable[dict] | None = None,
+    seed: int | None = None,
 ) -> int:
     """Read games, write record shards. Returns positions written.
 
@@ -161,6 +167,7 @@ def ingest(
     if games is None:
         games = _iter_games_from_mongo(config)
 
+    rng = np.random.default_rng(seed)
     buffer: list[tuple[np.ndarray, int, float]] = []
     shard_id = 0
     total_written = 0
@@ -183,22 +190,44 @@ def ingest(
         if len(moves) < config.pretrain.min_game_plies:
             continue
 
-        selected = select_move_indices(len(moves), config.pretrain.moves_per_game)
+        selected = select_move_indices(len(moves), config.pretrain.moves_per_game, rng)
 
         board = chess.Board()
         stop = False
+        # to handle problems in move list in db
+        game_buf_start = len(buffer)
+        positions_this_game = 0
+        corrupt = False
+
         for i, move in enumerate(moves):
+            # game in db has corrupt move
+            # remove all posisions sampled from this game and go on
+            if move == chess.Move.null():
+                in_buf = len(buffer) - game_buf_start
+                del buffer[game_buf_start:]
+                total_written -= in_buf
+                already_flushed = positions_this_game - in_buf
+                log.warning(
+                    "null move at ply %d (result=%s); discarding game. "
+                    "Rolled back %d buffered positions (%d already flushed to shard).",
+                    i, game.get("result"), in_buf, already_flushed,
+                )
+                corrupt = True
+                break
+
             if i in selected:
                 value = outcome_white if board.turn == chess.WHITE else -outcome_white
                 buffer.append(
                     (encode(board), move_to_index(move, board), float(value))
                 )
+                positions_this_game += 1
                 total_written += 1
 
                 if len(buffer) >= config.pretrain.shard_size:
                     write_shard(storage, subdir, shard_id, buffer)
                     log.info("wrote shard %d (%d positions)", shard_id, len(buffer))
                     buffer.clear()
+                    game_buf_start = 0
                     shard_id += 1
 
                 if max_positions is not None and total_written >= max_positions:
@@ -206,6 +235,8 @@ def ingest(
                     break
             board.push(move)
 
+        if corrupt:
+            continue
         if stop:
             break
 

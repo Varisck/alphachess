@@ -68,30 +68,18 @@ class TestSelectMoveIndices:
     def test_more_than_available_returns_all(self):
         assert select_move_indices(5, 100) == set(range(5))
 
-    def test_endpoints_included(self):
-        idx = select_move_indices(20, 5)
-        assert 0 in idx
-        assert 19 in idx
-
     def test_count_matches(self):
-        # When step >= 1 (moves_per_game <= num_moves) the rounded linspace
-        # is collision-free, so we get exactly moves_per_game indices.
+        rng = np.random.default_rng(0)
         for num_moves in [10, 20, 40, 100]:
             for k in [2, 3, 5, 10]:
                 if k <= num_moves:
-                    idx = select_move_indices(num_moves, k)
+                    idx = select_move_indices(num_moves, k, rng)
                     assert len(idx) == k, (num_moves, k, idx)
 
-    def test_evenly_spread(self):
-        # 4 indices over 40 plies -> first, ~13, ~26, last.
-        idx = sorted(select_move_indices(40, 4))
-        assert idx == [0, 13, 26, 39]
-
-    def test_includes_both_colors(self):
-        # 6 indices over 20 plies should hit both even (white) and odd (black) ply indices.
-        idx = select_move_indices(20, 6)
-        assert any(i % 2 == 0 for i in idx)
-        assert any(i % 2 == 1 for i in idx)
+    def test_no_duplicates(self):
+        rng = np.random.default_rng(0)
+        idx = select_move_indices(20, 10, rng)
+        assert len(idx) == len(set(idx))
 
 
 # ---------------------------------------------------------------------------

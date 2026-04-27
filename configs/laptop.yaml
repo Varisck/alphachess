@@ -1,5 +1,5 @@
 storage:
-  root_uri: "file:///data/alphachess/run_local"
+  root_uri: "file:///t:/Progetti/alphachess/data"
 
 nn:
   num_blocks: 5
@@ -10,6 +10,11 @@ mcts:
 
 selfplay:
   games_per_worker_batch: 4
+
+pretrain:
+  moves_per_game: 5
+  max_positions: 2_000_000
+  records_subdir: "pretrain_records"
 
 train:
   batch_size: 256
