@@ -28,7 +28,7 @@ from alphachess.storage import Storage
 log = logging.getLogger(__name__)
 
 
-def main(config_path: str, ingest_only: bool = False) -> int:
+def main(config_path: str, ingest_only: bool = False, num_workers: int = 1) -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
@@ -39,7 +39,7 @@ def main(config_path: str, ingest_only: bool = False) -> int:
     manifest_rel = f"{config.pretrain.records_subdir}/{MANIFEST_NAME}"
     if not storage.exists(manifest_rel):
         log.info("no records manifest at %s, ingesting from MongoDB", manifest_rel)
-        ingest(config, storage=storage)
+        ingest(config, storage=storage, num_workers=num_workers)
 
     if ingest_only:
         return 0
@@ -50,7 +50,7 @@ def main(config_path: str, ingest_only: bool = False) -> int:
         return 0
 
     log.info("starting supervised trainer")
-    train(config, storage=storage)
+    train(config, storage=storage, num_workers=num_workers)
     return 0
 
 
@@ -59,5 +59,8 @@ if __name__ == "__main__":
     parser.add_argument("--config", required=True, help="path to YAML config file")
     parser.add_argument("--ingest-only", action="store_true", default=False,
                         help="run ingest then exit, skip training")
+    parser.add_argument("--num-workers", type=int, default=1,
+                        help="number of worker processes for ingest (default: 1)")
     args = parser.parse_args()
-    sys.exit(main(args.config, ingest_only=args.ingest_only))
+    sys.exit(main(args.config, ingest_only=args.ingest_only,
+                  num_workers=args.num_workers))

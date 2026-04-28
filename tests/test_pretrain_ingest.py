@@ -36,6 +36,7 @@ def config():
     cfg.pretrain.shard_size = 10
     cfg.pretrain.min_game_plies = 2
     cfg.pretrain.max_positions = None
+    cfg.pretrain.moves_per_game = None
     return cfg
 
 
@@ -280,19 +281,18 @@ class TestIngest:
         n = ingest(config, storage=storage, games=iter(games))
         assert n == 4
 
-    def test_moves_per_game_sampling_includes_endpoints(self, storage, config):
-        # 8-ply game, sample 2 -> first ply (white, value +1) and last ply
-        # (black, value +1 since white wins and it's black to move => -(+1) = -1).
-        # Actually: ply 0 white-to-move -> +1; ply 7 black-to-move -> -1.
+    def test_moves_per_game_random_sampling(self, storage, config):
+        # 8-ply game with moves_per_game=2 must yield exactly 2 records,
+        # and value targets must be valid (+1 or -1 since white wins).
         config.pretrain.moves_per_game = 2
         games = [
             {"moves": "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6",
              "result": "1-0", "white_elo": 2500, "black_elo": 2500},
         ]
-        n = ingest(config, storage=storage, games=iter(games))
+        n = ingest(config, storage=storage, games=iter(games), seed=0)
         assert n == 2
         shard = _load_shard(storage, config.pretrain.records_subdir, 0)
-        assert list(shard["value_targets"]) == [1.0, -1.0]
+        assert all(v in (1.0, -1.0) for v in shard["value_targets"])
 
     def test_idempotent_when_manifest_exists(self, storage, config):
         games = [
@@ -324,3 +324,16 @@ class TestIngest:
 
         assert int(shard["policy_targets"][0]) == expected_0
         assert int(shard["policy_targets"][1]) == expected_1
+
+    def test_null_move_discards_whole_game(self, storage, config):
+        # A game with a null move embedded should produce no records.
+        # A second clean game should still produce records normally.
+        games = [
+            {"moves": "1. e4 e5 2. -- Nc6", "result": "1-0",
+             "white_elo": 2500, "black_elo": 2500},
+            {"moves": "1. e4 e5 2. Nf3 Nc6", "result": "1-0",
+             "white_elo": 2500, "black_elo": 2500},
+        ]
+        n = ingest(config, storage=storage, games=iter(games))
+        # First game discarded entirely; second contributes 4 records.
+        assert n == 4

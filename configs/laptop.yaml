@@ -13,7 +13,7 @@ selfplay:
 
 pretrain:
   moves_per_game: 5
-  max_positions: 2_000_000
+  max_positions: 4_000_000
   records_subdir: "pretrain_records"
 
 train:

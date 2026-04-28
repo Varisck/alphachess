@@ -12,7 +12,8 @@ from __future__ import annotations
 import io
 import json
 import logging
-from typing import Iterable
+from concurrent.futures import ProcessPoolExecutor
+from typing import Iterable, Iterator
 
 import chess
 import chess.pgn
@@ -143,18 +144,167 @@ def _iter_games_from_mongo(config: Config) -> Iterable[dict]:
         client.close()
 
 
+def _process_game(
+    game_doc: dict,
+    moves_per_game: int | None,
+    min_game_plies: int,
+    rng: np.random.Generator,
+) -> tuple[list[tuple[np.ndarray, int, float]], str | None]:
+    """Process one game atomically.
+
+    Returns ``(records, drop_reason)``. ``drop_reason`` is one of
+    ``"no_outcome"``, ``"san_error"``, ``"short"``, ``"null_move"`` or
+    ``None``. On any drop, ``records`` is empty.
+    """
+    outcome = parse_result(game_doc.get("result"))
+    if outcome is None:
+        return [], "no_outcome"
+
+    try:
+        moves = parse_san_moves(game_doc.get("moves", ""), game_doc["result"])
+    except Exception:
+        return [], "san_error"
+
+    if len(moves) < min_game_plies:
+        return [], "short"
+
+    selected = select_move_indices(len(moves), moves_per_game, rng)
+
+    board = chess.Board()
+    records: list[tuple[np.ndarray, int, float]] = []
+    for i, move in enumerate(moves):
+        if move == chess.Move.null():
+            return [], "null_move"
+        if i in selected:
+            value = outcome if board.turn == chess.WHITE else -outcome
+            records.append(
+                (encode(board), move_to_index(move, board), float(value))
+            )
+        board.push(move)
+    return records, None
+
+
+def _process_batch(
+    batch: list[dict],
+    moves_per_game: int | None,
+    min_game_plies: int,
+    seed: int | None,
+) -> tuple[list[tuple[np.ndarray, int, float]], dict[str, int]]:
+    """Worker entry point: process a batch of games, return all records."""
+    rng = np.random.default_rng(seed)
+    all_records: list[tuple[np.ndarray, int, float]] = []
+    counts = {"null_move": 0, "san_error": 0, "no_outcome": 0, "short": 0}
+    for game_doc in batch:
+        records, status = _process_game(
+            game_doc, moves_per_game, min_game_plies, rng
+        )
+        if status is not None:
+            counts[status] += 1
+        all_records.extend(records)
+    return all_records, counts
+
+
+def _iter_records_serial(
+    games: Iterable[dict],
+    config: Config,
+    seed: int | None,
+) -> Iterator[tuple[np.ndarray, int, float]]:
+    rng = np.random.default_rng(seed)
+    for game in games:
+        records, status = _process_game(
+            game,
+            config.pretrain.moves_per_game,
+            config.pretrain.min_game_plies,
+            rng,
+        )
+        if status == "null_move":
+            log.warning("null move; discarding game (result=%s)", game.get("result"))
+        elif status == "san_error":
+            log.warning("SAN parse error; skipping game")
+        yield from records
+
+
+def _iter_records_parallel(
+    games: Iterable[dict],
+    config: Config,
+    seed: int | None,
+    num_workers: int,
+    batch_size: int,
+) -> Iterator[tuple[np.ndarray, int, float]]:
+    """Yield records from worker processes, preserving submission order."""
+
+    def batches() -> Iterator[list[dict]]:
+        batch: list[dict] = []
+        for game in games:
+            batch.append(game)
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+        if batch:
+            yield batch
+
+    iter_batches = batches()
+    pool = ProcessPoolExecutor(max_workers=num_workers)
+    try:
+        pending: list = []
+        batch_idx = 0
+
+        for _ in range(num_workers * 2):
+            try:
+                batch = next(iter_batches)
+            except StopIteration:
+                break
+            worker_seed = (seed + batch_idx) if seed is not None else None
+            pending.append(pool.submit(
+                _process_batch, batch,
+                config.pretrain.moves_per_game,
+                config.pretrain.min_game_plies,
+                worker_seed,
+            ))
+            batch_idx += 1
+
+        while pending:
+            future = pending.pop(0)
+            records, counts = future.result()
+            if counts["null_move"]:
+                log.warning("discarded %d games with null moves", counts["null_move"])
+            if counts["san_error"]:
+                log.warning("skipped %d games with SAN errors", counts["san_error"])
+            yield from records
+
+            try:
+                batch = next(iter_batches)
+            except StopIteration:
+                continue
+            worker_seed = (seed + batch_idx) if seed is not None else None
+            pending.append(pool.submit(
+                _process_batch, batch,
+                config.pretrain.moves_per_game,
+                config.pretrain.min_game_plies,
+                worker_seed,
+            ))
+            batch_idx += 1
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
 def ingest(
     config: Config,
     storage: Storage | None = None,
     games: Iterable[dict] | None = None,
     seed: int | None = None,
+    num_workers: int = 1,
+    batch_size: int = 200,
 ) -> int:
     """Read games, write record shards. Returns positions written.
 
-    if a manifest already exists under ``{subdir}/{MANIFEST_NAME}``, returns 0.
+    With ``num_workers > 1`` games are processed in worker processes in
+    chunks of ``batch_size``; the main process reads the cursor and writes
+    shards in submission order. With ``num_workers = 1`` (default) the
+    serial path is used.
 
-    (The ``games`` parameter is for tests; production calls leave it as None
-    and the function reads from MongoDB.)
+    Idempotent: if a manifest already exists under
+    ``{subdir}/{MANIFEST_NAME}``, returns 0.
     """
     if storage is None:
         storage = Storage(config.storage.root_uri)
@@ -167,78 +317,29 @@ def ingest(
     if games is None:
         games = _iter_games_from_mongo(config)
 
-    rng = np.random.default_rng(seed)
+    if num_workers > 1:
+        records_iter = _iter_records_parallel(
+            games, config, seed, num_workers, batch_size,
+        )
+    else:
+        records_iter = _iter_records_serial(games, config, seed)
+
     buffer: list[tuple[np.ndarray, int, float]] = []
     shard_id = 0
     total_written = 0
     max_positions = config.pretrain.max_positions
 
-    for game in games:
+    for record in records_iter:
         if max_positions is not None and total_written >= max_positions:
             break
+        buffer.append(record)
+        total_written += 1
 
-        outcome_white = parse_result(game.get("result"))
-        if outcome_white is None:
-            continue
-
-        try:
-            moves = parse_san_moves(game.get("moves", ""), game["result"])
-        except Exception:
-            log.warning("failed to parse SAN for game, skipping", exc_info=True)
-            continue
-
-        if len(moves) < config.pretrain.min_game_plies:
-            continue
-
-        selected = select_move_indices(len(moves), config.pretrain.moves_per_game, rng)
-
-        board = chess.Board()
-        stop = False
-        # to handle problems in move list in db
-        game_buf_start = len(buffer)
-        positions_this_game = 0
-        corrupt = False
-
-        for i, move in enumerate(moves):
-            # game in db has corrupt move
-            # remove all posisions sampled from this game and go on
-            if move == chess.Move.null():
-                in_buf = len(buffer) - game_buf_start
-                del buffer[game_buf_start:]
-                total_written -= in_buf
-                already_flushed = positions_this_game - in_buf
-                log.warning(
-                    "null move at ply %d (result=%s); discarding game. "
-                    "Rolled back %d buffered positions (%d already flushed to shard).",
-                    i, game.get("result"), in_buf, already_flushed,
-                )
-                corrupt = True
-                break
-
-            if i in selected:
-                value = outcome_white if board.turn == chess.WHITE else -outcome_white
-                buffer.append(
-                    (encode(board), move_to_index(move, board), float(value))
-                )
-                positions_this_game += 1
-                total_written += 1
-
-                if len(buffer) >= config.pretrain.shard_size:
-                    write_shard(storage, subdir, shard_id, buffer)
-                    log.info("wrote shard %d (%d positions)", shard_id, len(buffer))
-                    buffer.clear()
-                    game_buf_start = 0
-                    shard_id += 1
-
-                if max_positions is not None and total_written >= max_positions:
-                    stop = True
-                    break
-            board.push(move)
-
-        if corrupt:
-            continue
-        if stop:
-            break
+        if len(buffer) >= config.pretrain.shard_size:
+            write_shard(storage, subdir, shard_id, buffer)
+            log.info("wrote shard %d (%d positions)", shard_id, len(buffer))
+            buffer.clear()
+            shard_id += 1
 
     if buffer:
         write_shard(storage, subdir, shard_id, buffer)

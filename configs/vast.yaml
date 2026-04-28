@@ -1,0 +1,22 @@
+storage:
+  root_uri: "file:///t:/Progetti/alphachess/data"
+  # root_uri: "s3://alphachess/data"
+
+nn:
+  num_blocks: 10
+  channels: 128
+
+pretrain:
+  max_positions: 4_000_000
+  records_subdir: "pretrain_records"
+  shard_size: 50_000
+  moves_per_game: 5
+  epochs: 10
+  batch_size: 2048
+  learning_rate: 1e-3
+  val_split: 0.05
+  value_loss_weight: 1.0
+  early_stop_top1: 0.50
+
+train:
+  weight_decay: 1e-4
