@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -116,11 +117,15 @@ class Config(BaseSettings):
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "Config":
+        # hydrate .env into os.environ so downstream libs (boto3, etc.) see
+        # credentials. OS-set vars take precedence — load_dotenv won't override.
+        load_dotenv()
         raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
         return cls.model_validate(raw)
 
     @classmethod
     def from_env(cls) -> "Config":
+        load_dotenv()
         return cls()
 
     def hash(self) -> str:

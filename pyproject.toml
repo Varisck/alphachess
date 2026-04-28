@@ -17,6 +17,7 @@ dependencies = [
     "pyyaml>=6.0",
     "structlog>=23.1",
     "pymongo>=4.0",
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
