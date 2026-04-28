@@ -52,6 +52,7 @@ class PretrainDataset(IterableDataset):
         split: Literal["train", "val"] = "train",
         val_split: float = 0.05,
         shuffle: bool | None = None,
+        cache_shards: bool = False,
     ):
         super().__init__()
         self.storage = storage
@@ -60,6 +61,11 @@ class PretrainDataset(IterableDataset):
         self.val_split = val_split
         # Train shuffles, val keeps deterministic order, unless overridden.
         self.shuffle = shuffle if shuffle is not None else (split == "train")
+        # When True, decompressed-but-still-bytes shard payloads are kept in
+        # the worker's process memory so epoch 2+ skip the network round trip.
+        # Bounded: at most one entry per shard owned by this worker.
+        self.cache_shards = cache_shards
+        self._cache: dict[str, bytes] = {}
 
         all_shards = sorted(
             storage.list(records_subdir, suffix=".npz")
@@ -73,7 +79,11 @@ class PretrainDataset(IterableDataset):
             random.shuffle(my_shards)
 
         for name in my_shards:
-            raw = self.storage.read_bytes(f"{self.records_subdir}/{name}")
+            raw = self._cache.get(name) if self.cache_shards else None
+            if raw is None:
+                raw = self.storage.read_bytes(f"{self.records_subdir}/{name}")
+                if self.cache_shards:
+                    self._cache[name] = raw
             with np.load(io.BytesIO(raw)) as data:
                 states = data["states"]
                 policies = data["policy_targets"]

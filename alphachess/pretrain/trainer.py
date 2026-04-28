@@ -29,7 +29,7 @@ from alphachess.storage import Storage
 
 log = logging.getLogger(__name__)
 
-PRETRAIN_LAST = "models/_pretrain_last.pt"
+PRETRAIN_BEST = "models/_pretrain_best.pt"
 PRETRAIN_FINAL_GENERATION = 0
 DEFAULT_LOG_PATH = "data/logs/pretrain.jsonl"
 DEFAULT_TRAIN_LOG_INTERVAL = 50
@@ -71,7 +71,7 @@ def _save_full_checkpoint(
         },
         buf,
     )
-    storage.atomic_put(PRETRAIN_LAST, buf.getvalue())
+    storage.atomic_put(PRETRAIN_BEST, buf.getvalue())
 
 
 class JsonlLogger:
@@ -161,23 +161,23 @@ def train(
         records_subdir=config.pretrain.records_subdir,
         split="train",
         val_split=config.pretrain.val_split,
+        cache_shards=True,
     )
     val_ds = PretrainDataset(
         storage,
         records_subdir=config.pretrain.records_subdir,
         split="val",
         val_split=config.pretrain.val_split,
+        cache_shards=True,
     )
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=config.pretrain.batch_size,
-        num_workers=num_workers,
-    )
-    val_loader = DataLoader(
-        val_ds,
-        batch_size=config.pretrain.batch_size,
-        num_workers=num_workers,
-    )
+    loader_kwargs = {
+        "batch_size": config.pretrain.batch_size,
+        "num_workers": num_workers,
+        "pin_memory": device.type == "cuda",
+        "persistent_workers": num_workers > 0,
+    }
+    train_loader = DataLoader(train_ds, **loader_kwargs)
+    val_loader = DataLoader(val_ds, **loader_kwargs)
 
     model = _build_model(config).to(device)
     optimizer = torch.optim.Adam(
@@ -193,6 +193,8 @@ def train(
 
     final_path = f"models/{PRETRAIN_FINAL_GENERATION:06d}.pt"
     early_stopped = False
+
+    best_val_loss = float("inf")
 
     for epoch in range(1, config.pretrain.epochs + 1):
         model.train()
@@ -243,7 +245,13 @@ def train(
             val["top1"], val["top5"], elapsed,
         )
 
-        _save_full_checkpoint(storage, model, optimizer, epoch)
+        if val["total_loss"] < best_val_loss:
+            best_val_loss = val["total_loss"]
+            _save_full_checkpoint(storage, model, optimizer, epoch)
+            log.info("epoch %d: new best val loss %.4f — checkpoint saved", epoch, best_val_loss)
+        else:
+            log.info("epoch %d: val loss %.4f did not improve over %.4f — skipping checkpoint",
+                     epoch, val["total_loss"], best_val_loss)
 
         if val["top1"] >= config.pretrain.early_stop_top1:
             log.info(
@@ -253,9 +261,16 @@ def train(
             early_stopped = True
             break
 
-    model.cpu().save_to(storage, generation=PRETRAIN_FINAL_GENERATION)
+    best_ckpt = torch.load(io.BytesIO(storage.read_bytes(PRETRAIN_BEST)), map_location="cpu")
+    model.cpu().load_state_dict(best_ckpt["model_state"])
+    model.save_to(storage, generation=PRETRAIN_FINAL_GENERATION)
     log.info(
-        "wrote final checkpoint %s (early_stopped=%s)",
-        final_path, early_stopped,
+        "wrote final checkpoint %s (best val loss=%.4f, early_stopped=%s)",
+        final_path, best_val_loss, early_stopped,
     )
+
+    log_rel = "logs/pretrain.jsonl"
+    storage.write_bytes(log_rel, Path(log_path).read_bytes())
+    log.info("uploaded training log to %s", log_rel)
+
     return final_path

@@ -1,6 +1,6 @@
 storage:
-  root_uri: "file:///t:/Progetti/alphachess/data"
-  # root_uri: "s3://alphachess/data"
+  # root_uri: "file:///t:/Progetti/alphachess/data"
+  root_uri: "s3://alphachess/data"
 
 nn:
   num_blocks: 10
