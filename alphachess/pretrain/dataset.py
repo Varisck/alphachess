@@ -55,7 +55,10 @@ class PretrainDataset(IterableDataset):
         cache_shards: bool = False,
     ):
         super().__init__()
-        self.storage = storage
+        # Keep only the URI, not the Storage object. fsspec backends like s3fs
+        # hold an asyncio loop / aiobotocore session that does not survive a
+        # DataLoader worker fork — each worker must build its own Storage.
+        self.root_uri = storage.root_uri
         self.records_subdir = records_subdir
         self.split = split
         self.val_split = val_split
@@ -78,10 +81,12 @@ class PretrainDataset(IterableDataset):
             my_shards = list(my_shards)
             random.shuffle(my_shards)
 
+        storage = Storage(self.root_uri)
+
         for name in my_shards:
             raw = self._cache.get(name) if self.cache_shards else None
             if raw is None:
-                raw = self.storage.read_bytes(f"{self.records_subdir}/{name}")
+                raw = storage.read_bytes(f"{self.records_subdir}/{name}")
                 if self.cache_shards:
                     self._cache[name] = raw
             with np.load(io.BytesIO(raw)) as data:
