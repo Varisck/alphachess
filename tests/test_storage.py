@@ -64,6 +64,15 @@ def test_atomic_put_leaves_no_tmp_file(storage):
     assert storage.list("models") == ["000000.pt"]
 
 
+def test_newest_returns_lex_last_not_numeric_last(storage):
+    """newest() is purely lexicographic. '_' sorts after digits, so a file
+    like '_pretrain_best.pt' beats '999999.pt'. Callers that need numeric
+    generation order (e.g. InferenceModel) must filter the result themselves."""
+    storage.write_bytes("models/000000.pt", b"gen0")
+    storage.write_bytes("models/_pretrain_best.pt", b"special")
+    assert storage.newest("models", ".pt") == "_pretrain_best.pt"
+
+
 def test_newest_ignores_tmp_sidecars(storage):
     """Simulate a half-written file: an orphaned .tmp sidecar must not be
     returned as 'newest' because it does not end in the requested suffix."""

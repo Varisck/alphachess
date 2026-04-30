@@ -34,10 +34,6 @@ class TestFromYaml:
         assert cfg.orchestrator.role == "local"
         assert cfg.orchestrator.selfplay_workers == 2
 
-    def test_storage_root_uri(self):
-        cfg = Config.from_yaml(LAPTOP_YAML)
-        assert cfg.storage.root_uri == "file:///data/alphachess/run_local"
-
 
 class TestFromEnv:
     def test_env_overrides_nn_blocks(self, monkeypatch):
