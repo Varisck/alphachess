@@ -30,7 +30,7 @@ from alphachess.storage import Storage
 log = logging.getLogger(__name__)
 
 PRETRAIN_BEST = "models/_pretrain_best.pt"
-PRETRAIN_FINAL_GENERATION = 0
+PRETRAIN_FINAL_GENERATION = 1
 DEFAULT_LOG_PATH = "data/logs/pretrain.jsonl"
 DEFAULT_TRAIN_LOG_INTERVAL = 50
 
