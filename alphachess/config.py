@@ -55,10 +55,14 @@ class MCTSConfig(BaseModel):
 
 class SelfplayConfig(BaseModel):
     games_per_worker_batch: int = 32
+    records_per_shard: int = 64
     temperature_moves: int = 30
     resign_threshold: float = -0.9
     resign_disable_pct: float = 0.1
-    max_game_plies: int = 512
+    max_game_plies: int = 200
+    resign_consecutive_hits: int = 3
+    save_on_shutdown: bool = False
+    
 
 
 class TrainConfig(BaseModel):

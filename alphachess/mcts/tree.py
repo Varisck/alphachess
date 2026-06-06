@@ -3,6 +3,8 @@ from __future__ import annotations
 import chess
 import numpy as np
 
+from collections import deque
+
 from alphachess.config import MCTSConfig
 from alphachess.game.encoding import legal_action_mask, index_to_move
 
@@ -114,6 +116,74 @@ class Tree:
             node_id = parent
 
 
+    def reroot(self, action: int) -> None:
+        """Promote the child reached by ``action`` to become the new root.
+
+        Preserves the subtree under that child (visits, priors, and all descendants) 
+        and discards every other branch.
+
+        Detail: the re-rooted tree uses node space, new simulations can add
+        up to num_simulations nodes so max_nodes must account for that
+        """
+        
+        new_root_id = self.children[0, action]
+        max_nodes = self.N.shape[0]
+
+        # if action was not explored rebuild new tree
+        if new_root_id == -1:
+            self.__init__(max_nodes, self._config)
+            return
+        
+        # get the indicies of the reachable nodes from the root
+        reachable = np.full(self.n_nodes, -1, np.int32)
+        reachable[0] = new_root_id
+        end = 1
+        queue = deque([new_root_id])
+
+        while queue:
+            rn = int(queue.popleft())
+            childrens = self.children[rn]
+            childrens = childrens[childrens != -1].tolist()
+            reachable[end:end + len(childrens)] = childrens
+            end = end + len(childrens)
+            queue.extend(childrens)
+
+        indicies = reachable[:end]
+        
+        # inverse lookup 
+        old_to_new = np.full(self.n_nodes + 1, -1, dtype=np.int32)
+        old_to_new[indicies] = np.arange(end, dtype=np.int32)
+
+        self.N[:end] = self.N[indicies]
+        self.W[:end] = self.W[indicies]
+        self.P[:end] = self.P[indicies]
+        self.is_expanded[:end] = self.is_expanded[indicies]
+        self.legal_masks[:end] = self.legal_masks[indicies]
+        self.parent_action[:end] = self.parent_action[indicies]
+
+        # children remap entries
+        self.children[:end] = old_to_new[self.children[indicies]]
+
+        # parentremap entries
+        self.parent[:end] = old_to_new[self.parent[indicies]]
+        self.parent[0] = -1
+        self.parent_action[0] = -1
+
+        # Clear the tail slots
+        self.N[end:] = 0
+        self.W[end:] = 0
+        self.P[end:] = 0
+        self.children[end:] = -1
+        self.is_expanded[end:] = False
+        self.legal_masks[end:] = False
+        self.parent[end:] = -1
+        self.parent_action[end:] = -1
+        max_nodes = self.N.shape[0]
+        self.boards = [self.boards[i] for i in indicies] + [None] * (max_nodes - end)
+        self.n_nodes = end
+
+
+
     def root_visit_distribution(self) -> np.ndarray:
         """Return the visit-count policy at the root.
 
@@ -127,6 +197,13 @@ class Tree:
     def root_visits(self) -> int:
         """Total visit count across all actions at the root."""
         return int(np.sum(self.N[0]))
+    
+
+    def root_value(self) -> float:
+        """Return the value at the root"""
+        if self.root_visits() <= 0:
+            return 0.0
+        return float(self.W[0].sum() / self.root_visits())
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -146,7 +223,7 @@ class Tree:
         with np.errstate(invalid="ignore", divide="ignore"):    # avoids warning
             Q = np.where(N > 0, W / N, 0.0).astype(np.float32)   
 
-        total_N = int(N.sum()) # total visits to node_id
+        total_N = int(N.sum())     # total visits to node_id
         U = self._config.c_puct * P * (np.sqrt(total_N) / (1 + N))
 
         scores = Q + U
